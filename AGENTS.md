@@ -4,6 +4,28 @@ This repository develops reusable source blocks for Fiber v3, PostgreSQL with
 handwritten SQL through pgx, and Redis through go-redis. Users copy the source
 into their own projects and own the result.
 
+## Required start of every agent task
+
+Before planning work, proposing an implementation, editing files, or running
+implementation commands, every agent working in this repository must:
+
+1. Read this entire `AGENTS.md` file.
+2. Read `docs/architecture.md` and `docs/block-contract.md`.
+3. Read `docs/fiber-v3.md` for any task that may touch HTTP behavior, middleware,
+   application setup, configuration, lifecycle, or a Fiber-dependent block.
+4. Inspect the current repository state and existing block/example code relevant
+   to the request. Do not assume the repository is empty or recreate completed
+   foundation work.
+5. Restate the applicable constraints in its working plan, especially the
+   no-Docker rule, source-copy design, current stack, scope authorized by the
+   user, and the mandatory upstream verification gate below.
+
+This startup sequence is mandatory even when the task appears small or the agent
+has worked in the repository before. Reading summaries or relying on prior model
+memory does not replace reading the current files. After completing the sequence,
+the agent may proceed with the user's requested work without asking for redundant
+confirmation.
+
 ## Mandatory upstream verification gate
 
 This gate applies to every agent and every change that designs, creates, or

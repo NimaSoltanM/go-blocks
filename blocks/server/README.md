@@ -11,7 +11,7 @@ migrations, background workers, or external services required by this block.
 ## Copy it
 
 1. Create a new package such as `internal/server` in your application's Go module.
-2. Copy `config.go`, `server.go`, and `run.go` into it. Also copy the three
+2. Copy `config.go`, `public_error.go`, `server.go`, and `run.go` into it. Also copy the three
    `*_test.go` files if you want to retain the block's behavior checks.
 3. Add the dependency with `go get github.com/gofiber/fiber/v3@v3.5.0`, then run
    `go mod tidy`. In an existing application, review dependency changes and run
@@ -20,7 +20,7 @@ migrations, background workers, or external services required by this block.
    the block contain no repository-specific imports to rewrite.
 5. Create the logger and app, register routes, and call `Run` as shown below.
 
-The separate module in `examples/basic-api` contains a real copy of these three
+The separate module in `examples/basic-api` contains a real copy of these four
 files. It has its own `go.mod`/`go.sum` and no replacement or import pointing at
 the development repository. The repository checks verify that its copied source
 matches this block and test both modules independently with `GOWORK=off`.
@@ -117,7 +117,13 @@ An explicit non-success response such as readiness 503 is preserved if its probe
 finishes as the request deadline expires; only a late success is replaced by 504.
 Error responses discard partial bodies and headers (including cookies), set
 `Cache-Control: no-store`, and include the request ID in `X-Request-ID` and JSON.
-Customize `errorHandler` if your application needs specific public validation errors.
+Feature blocks may return an error implementing `PublicError` to provide an
+explicit safe status, code, message, and optional retry delay. The handler
+validates that metadata, rounds retry delays up to whole seconds, and emits both
+`Retry-After` and `retry_after_seconds`. Invalid metadata falls back to the normal
+500 contract. The interface is structural so copied feature blocks do not import
+the server package. Customize `errorHandler` if the application needs more public
+metadata.
 
 Middleware order is Fiber v3 request ID, Fiber v3 logger with a `slog` adapter,
 Fiber v3 recovery, then

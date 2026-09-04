@@ -3,8 +3,10 @@
 Reusable backend source blocks for **Fiber v3, PostgreSQL, and Redis**.
 Copy a feature into your application, wire its dependencies, and adapt the code.
 
-**First block:** [server](blocks/server/README.md), with a runnable, independent
-[basic API example](examples/basic-api/README.md).
+Available blocks are [server](blocks/server/README.md) and
+[Iranian phone auth](blocks/auth/README.md). The repository includes independent
+[basic server](examples/basic-api/README.md) and
+[phone-auth](examples/phone-auth-api/README.md) examples with maintained source copies.
 
 ## Stack
 
@@ -14,7 +16,7 @@ Copy a feature into your application, wire its dependencies, and adapt the code.
 | HTTP | Fiber v3 |
 | PostgreSQL | Handwritten, parameterized SQL through pgx v5 and pgxpool |
 | Redis | go-redis v9 |
-| Schema changes | Versioned SQL files; migration runner selected with the first database block |
+| Schema changes | Paired plain SQL files, verified with `golang-migrate` |
 
 Exact Go dependency versions are recorded in `go.mod` and `go.sum`. The local
 module name `goblocks.local/dev` identifies this development repository; it is
@@ -60,15 +62,15 @@ go test -tags=integration -run='^$' ./tests/smoke
 ```
 
 These are the root module's commands. Repeat tidy, verify, vet, and test inside
-`examples/basic-api` to check that module too, or use the scripts above to check
-both automatically.
+each example module to check it independently, or use the scripts above to check
+all modules automatically.
 
-No external service installation is part of these checks. Tests cover server
-behavior, example wiring, and source-copy consistency. Lifecycle and body-limit
-tests briefly open ephemeral loopback TCP listeners; PostgreSQL and Redis are
-not needed. The dependency smoke test also runs in-process.
+No external service installation is part of these checks. Tests cover server and
+auth behavior, example wiring, and source-copy consistency. Lifecycle and
+body-limit tests briefly open ephemeral loopback TCP listeners; PostgreSQL and
+Redis are not needed. The dependency smoke test also runs in-process.
 
-## Run the first example
+## Run the server example
 
 From the repository root on Windows:
 
@@ -109,11 +111,21 @@ not migrate a schema or write application data. Missing variables fail an
 explicit integration run rather than silently skipping it. `.env` files are
 ignored by Git and are not automatically loaded.
 
+The auth block has separate opt-in behavior checks that create isolated Redis
+keys and a temporary PostgreSQL schema, then remove them. Run them only against
+dedicated test services, never production:
+
+```powershell
+go test -tags=integration -count=1 -v ./blocks/auth
+```
+
 ## Repository layout
 
 ```text
 blocks/server/          Copyable server source, tests, and integration instructions
+blocks/auth/            Iranian SMS auth source, migration, tests, and contract
 examples/basic-api/     Independent Go module containing a real server source copy
+examples/phone-auth-api/ Independent module containing copies of server and auth
 docs/architecture.md    Boundaries and stack decisions
 docs/block-contract.md  Contents and integration rules for future blocks
 docs/fiber-v3.md        Version checks, middleware inventory, and current decisions
@@ -130,6 +142,6 @@ connected to GitHub and pushed.
 
 ## Next milestone
 
-Use the server block in a real project, then scope session authentication as the
-first database-backed feature. Installer and registry work can follow once the
-manual copying workflow is proven in use.
+Use both blocks in a real project and adapt the example webhook to its SMS
+provider. Additional identity features should be separate contract revisions or
+blocks rather than expanding this intentionally narrow login flow implicitly.

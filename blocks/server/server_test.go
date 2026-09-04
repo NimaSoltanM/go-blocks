@@ -18,6 +18,66 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/requestid"
 )
 
+type testPublicError struct {
+	status     int
+	code       string
+	message    string
+	retryAfter time.Duration
+	cause      error
+}
+
+type statefulPublicError struct {
+	statusCalls, codeCalls, messageCalls, retryCalls int
+}
+
+type nilSlicePublicError []string
+
+type wrappedBrokenError struct{ cause error }
+type panickingPublicError struct{}
+
+func (e nilSlicePublicError) Error() string           { return e[0] }
+func (nilSlicePublicError) HTTPStatus() int           { return 400 }
+func (nilSlicePublicError) PublicCode() string        { return "bad" }
+func (nilSlicePublicError) PublicMessage() string     { return "Bad" }
+func (nilSlicePublicError) RetryAfter() time.Duration { return 0 }
+
+func (*wrappedBrokenError) Error() string   { return "wrapped broken error" }
+func (e *wrappedBrokenError) Unwrap() error { return e.cause }
+
+func (*panickingPublicError) Error() string             { return "panicking metadata" }
+func (*panickingPublicError) HTTPStatus() int           { panic("metadata panic") }
+func (*panickingPublicError) PublicCode() string        { return "bad" }
+func (*panickingPublicError) PublicMessage() string     { return "Bad" }
+func (*panickingPublicError) RetryAfter() time.Duration { return 0 }
+
+func (*statefulPublicError) Error() string { return "internal stateful error" }
+func (e *statefulPublicError) HTTPStatus() int {
+	e.statusCalls++
+	if e.statusCalls == 1 {
+		return 429
+	}
+	return 200
+}
+func (e *statefulPublicError) PublicCode() string {
+	e.codeCalls++
+	return "rate_limited"
+}
+func (e *statefulPublicError) PublicMessage() string {
+	e.messageCalls++
+	return "Try again later"
+}
+func (e *statefulPublicError) RetryAfter() time.Duration {
+	e.retryCalls++
+	return time.Second
+}
+
+func (e *testPublicError) Error() string             { return e.cause.Error() }
+func (e *testPublicError) Unwrap() error             { return e.cause }
+func (e *testPublicError) HTTPStatus() int           { return e.status }
+func (e *testPublicError) PublicCode() string        { return e.code }
+func (e *testPublicError) PublicMessage() string     { return e.message }
+func (e *testPublicError) RetryAfter() time.Duration { return e.retryAfter }
+
 func quietLogger() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Discard, nil)) }
 
 func testApp(t *testing.T, cfg Config) *fiber.App {
@@ -27,6 +87,93 @@ func testApp(t *testing.T, cfg Config) *fiber.App {
 		t.Fatal(err)
 	}
 	return app
+}
+
+func TestPublicErrorMetadataAndValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		status    int
+		code      string
+		retry     string
+		retryJSON int64
+	}{
+		{
+			name: "valid wrapped rate limit",
+			err: fmt.Errorf("request code: %w", &testPublicError{
+				status: 429, code: "rate_limited", message: "Try again later",
+				retryAfter: 1201 * time.Millisecond, cause: errors.New("private limit key"),
+			}),
+			status: 429, code: "rate_limited", retry: "2", retryJSON: 2,
+		},
+		{
+			name: "invalid code falls back safely",
+			err: &testPublicError{
+				status: 400, code: "Bad-Code", message: "unsafe", cause: errors.New("private"),
+			},
+			status: 500, code: "internal_server_error",
+		},
+		{
+			name: "retry metadata restricted by status",
+			err: &testPublicError{
+				status: 400, code: "invalid_request", message: "Invalid request",
+				retryAfter: time.Second, cause: errors.New("private"),
+			},
+			status: 500, code: "internal_server_error",
+		},
+		{
+			name:   "typed nil public error falls back safely",
+			err:    (*testPublicError)(nil),
+			status: 500, code: "internal_server_error",
+		},
+		{
+			name:   "typed nil slice error falls back safely",
+			err:    nilSlicePublicError(nil),
+			status: 500, code: "internal_server_error",
+		},
+		{
+			name:   "wrapped typed nil chain falls back safely",
+			err:    &wrappedBrokenError{cause: nilSlicePublicError(nil)},
+			status: 500, code: "internal_server_error",
+		},
+		{
+			name:   "panicking public metadata falls back safely",
+			err:    &panickingPublicError{},
+			status: 500, code: "internal_server_error",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := testApp(t, DefaultConfig())
+			app.Get("/fail", func(fiber.Ctx) error { return tc.err })
+			resp, body := request(t, app, "GET", "/fail", "")
+			expectError(t, resp, body, tc.status, tc.code)
+			if got := resp.Header.Get("Retry-After"); got != tc.retry {
+				t.Fatalf("Retry-After=%q, want %q", got, tc.retry)
+			}
+			var envelope errorEnvelope
+			if err := json.Unmarshal(body, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Error.RetryAfterSeconds != tc.retryJSON {
+				t.Fatalf("retry_after_seconds=%d, want %d", envelope.Error.RetryAfterSeconds, tc.retryJSON)
+			}
+			if strings.Contains(string(body), "private") {
+				t.Fatalf("private cause leaked: %s", body)
+			}
+		})
+	}
+}
+
+func TestPublicErrorMetadataIsSnapshottedOnce(t *testing.T) {
+	publicErr := &statefulPublicError{}
+	app := testApp(t, DefaultConfig())
+	app.Get("/fail", func(fiber.Ctx) error { return publicErr })
+	resp, body := request(t, app, "GET", "/fail", "")
+	expectError(t, resp, body, 429, "rate_limited")
+	if publicErr.statusCalls != 1 || publicErr.codeCalls != 1 || publicErr.messageCalls != 1 || publicErr.retryCalls != 1 {
+		t.Fatalf("public metadata calls: status=%d code=%d message=%d retry=%d",
+			publicErr.statusCalls, publicErr.codeCalls, publicErr.messageCalls, publicErr.retryCalls)
+	}
 }
 
 func request(t *testing.T, app *fiber.App, method, path, body string) (*http.Response, []byte) {

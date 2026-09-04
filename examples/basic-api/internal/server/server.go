@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
@@ -82,18 +83,30 @@ type errorEnvelope struct {
 }
 
 type errorDetail struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id"`
+	Code              string `json:"code"`
+	Message           string `json:"message"`
+	RequestID         string `json:"request_id"`
+	RetryAfterSeconds int64  `json:"retry_after_seconds,omitempty"`
 }
 
 func errorHandler(logger *slog.Logger) fiber.ErrorHandler {
 	return func(c fiber.Ctx, err error) error {
 		status := http.StatusInternalServerError
+		var retryAfter int64
+		var publicErr PublicError
 		var httpErr *fiber.Error
-		if errors.As(err, &httpErr) && httpErr != nil && httpErr.Code >= 400 && httpErr.Code <= 599 {
+		typedNil := isNilError(err)
+		deadlineExceeded := !typedNil && safeErrorsIs(err, context.DeadlineExceeded)
+		metadata, publicOK := publicErrorMetadata{}, false
+		if !typedNil && safeErrorsAs(err, &publicErr) {
+			metadata, publicOK = readPublicError(publicErr)
+		}
+		if publicOK {
+			status = metadata.status
+			retryAfter = retryAfterSeconds(metadata.retryAfter)
+		} else if !typedNil && safeErrorsAs(err, &httpErr) && httpErr != nil && httpErr.Code >= 400 && httpErr.Code <= 599 {
 			status = httpErr.Code
-		} else if errors.Is(err, context.DeadlineExceeded) {
+		} else if deadlineExceeded {
 			status = http.StatusGatewayTimeout
 		}
 		message := http.StatusText(status)
@@ -101,7 +114,9 @@ func errorHandler(logger *slog.Logger) fiber.ErrorHandler {
 			status, message = http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError)
 		}
 		code := strings.ReplaceAll(strings.ToLower(message), " ", "_")
-		if status == http.StatusGatewayTimeout && errors.Is(err, context.DeadlineExceeded) {
+		if publicOK {
+			code, message = metadata.code, metadata.message
+		} else if status == http.StatusGatewayTimeout && deadlineExceeded {
 			code, message = "request_timeout", "Request timed out"
 		}
 		id := requestid.FromContext(c)
@@ -110,7 +125,8 @@ func errorHandler(logger *slog.Logger) fiber.ErrorHandler {
 			id = rand.Text()
 		}
 		if status >= 500 {
-			logger.ErrorContext(c.Context(), "request_failed", "request_id", id, "error", err.Error())
+			internalMessage := safeErrorMessage(err)
+			logger.ErrorContext(c.Context(), "request_failed", "request_id", id, "error", internalMessage)
 		}
 		// Discard any partial success body and headers, including cookies. Preserve
 		// a protocol-level connection close requested by the HTTP server.
@@ -121,10 +137,43 @@ func errorHandler(logger *slog.Logger) fiber.ErrorHandler {
 		}
 		c.Set("X-Request-ID", id)
 		c.Set("Cache-Control", "no-store")
+		if retryAfter > 0 {
+			c.Set("Retry-After", strconv.FormatInt(retryAfter, 10))
+		}
 		return c.Status(status).JSON(errorEnvelope{Error: errorDetail{
-			Code: code, Message: message, RequestID: id,
+			Code: code, Message: message, RequestID: id, RetryAfterSeconds: retryAfter,
 		}})
 	}
+}
+
+func safeErrorsAs(err error, target any) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	return errors.As(err, target)
+}
+
+func safeErrorsIs(err, target error) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	return errors.Is(err, target)
+}
+
+func safeErrorMessage(err error) (message string) {
+	if isNilError(err) {
+		return "typed nil error"
+	}
+	defer func() {
+		if recover() != nil {
+			message = "error string panicked"
+		}
+	}()
+	return err.Error()
 }
 
 // RegisterHealth explicitly adds Fiber v3's conventional GET/HEAD /livez and

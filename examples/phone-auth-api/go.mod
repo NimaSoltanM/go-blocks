@@ -1,4 +1,4 @@
-module goblocks.local/dev
+module example.com/phone-auth-api
 
 go 1.26.0
 

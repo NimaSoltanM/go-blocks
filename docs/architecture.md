@@ -14,8 +14,9 @@ dependency versions. The repository is a development and verification workspace.
   Applications create a `pgxpool.Pool` at startup and own its shutdown.
 - **Redis:** go-redis v9. Applications own the client and pass it to features
   that need it. Blocks that do not need Redis do not require a Redis client.
-- **Schema:** versioned SQL migrations, kept with the feature that owns them.
-  A migration tool will be chosen when a database block needs one.
+- **Schema:** versioned, paired up/down SQL migrations kept with the feature that
+  owns them. The auth contract selects plain SQL verified with `golang-migrate`;
+  blocks do not import or run the migration tool at application runtime.
 - **Logging:** standard-library `log/slog` unless a concrete feature requires more.
 - **Development:** Go and Git, with native or externally hosted test services.
   No Docker, Compose, container images, or container-dependent test harnesses.
@@ -83,11 +84,14 @@ The smoke tests validate dependency compatibility and optional connectivity.
 `blocks/server` also has behavior tests, including actual loopback TCP requests
 and shutdown checks. Its source is copied into `examples/basic-api`, an independent
 Go module verified by the same scripts. `tests/copy` prevents that maintained
-example from drifting from the source block. Authentication is not implemented.
+example from drifting from the source block. `blocks/auth` adds isolated unit and
+opt-in real-service tests; `examples/phone-auth-api` contains maintained source
+copies of both blocks and their auth migration.
 
 ## References
 
 - [Repository Fiber v3 baseline](fiber-v3.md)
+- [Auth block contract](auth-contract.md)
 - [Fiber v3 context behavior](https://docs.gofiber.io/guide/go-context/)
 - [pgx PostgreSQL driver and toolkit](https://github.com/jackc/pgx)
 - [go-redis connection guide](https://redis.io/docs/latest/develop/clients/go/connect/)
